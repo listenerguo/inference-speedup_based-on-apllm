@@ -1,10 +1,17 @@
 import torch
 import torch.nn as nn
 
-# try:
-#     from any_precision_ext import matmul_kbit, dequant_kbit
-# except:
-#     matmul_kbit, dequant_kbit = None, None
+# Try to import CUDA extension for accelerated inference
+# Falls back to Python implementation if not available
+try:
+    from any_precision_ext import matmul_kbit_pergroup, dequant_formula_kbit
+    CUDA_AVAILABLE = True
+except ImportError:
+    matmul_kbit_pergroup, dequant_formula_kbit = None, None
+    CUDA_AVAILABLE = False
+
+# Supported group sizes for CUDA kernel (must match kernel compilation)
+CUDA_SUPPORTED_GROUP_SIZES = {32, 64, 128, 256, 512}
 
 
 class APLinear(nn.Module):
@@ -70,10 +77,44 @@ class APLinear(nn.Module):
         else:
             w_bits = self.precision
 
-        # print(" MAT- CODE-PATH ")
-        weight = self._dequant_temp(w_bits, self.group_size, self.qweight, self._buffers[f'scale{w_bits}'], self._buffers[f'zero'])
+        # Get scale and zero for current precision
+        scale = self._buffers[f'scale{w_bits}']
+        zero = self._buffers['zero']
 
-        out = torch.matmul(x, weight.T)
+        # Apply bit error correction for zero point
+        bit_err = w_bits - min(self.precisions)
+        zero_adjusted = zero * (2 ** bit_err)
+
+        # Check if we can use CUDA kernel
+        use_cuda = (
+            CUDA_AVAILABLE and
+            x.is_cuda and
+            self.group_size in CUDA_SUPPORTED_GROUP_SIZES and
+            w_bits >= 3 and w_bits <= 8 and
+            self.out_features % 4 == 0  # N must be divisible by num_rows(4)
+        )
+
+        if use_cuda:
+            # Use fused CUDA kernel: dequant + matmul in one pass
+            # Ensure tensors are in correct format (half precision, contiguous)
+            x_half = x.half().contiguous()
+            scale_half = scale.half().contiguous()
+            zero_half = zero_adjusted.half().contiguous()
+
+            out = matmul_kbit_pergroup(
+                x_half,
+                self.qweight,
+                scale_half,
+                zero_half,
+                w_bits,
+                self.group_size
+            )
+        else:
+            # Fallback to Python implementation
+            weight = self._dequant_temp(w_bits, self.group_size, self.qweight, scale, zero)
+            out = torch.matmul(x, weight.T)
+
+        # Add bias if present
         out = out + self.bias if self.bias is not None else out
 
         return out
