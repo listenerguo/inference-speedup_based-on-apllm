@@ -246,3 +246,5 @@ quant_bit     = 6  # 推理位宽（w_bits）
   > `w = s · (w' − z)`，并与 GEMM 深度融合至 CUDA 内核。
 
 ---
+
+readme写的不错
