@@ -56,8 +56,9 @@ __global__ void dequant_formula_kbit_store(
         }
 
         // Calculate base column index for this iteration
-        // Each thread processes 32 columns (one uint32 per bit-plane)
-        const int col_base = i * warp_size * 32 + threadIdx.x * 32;
+        // Each thread processes 32 weights, but they are interleaved across warps
+        // Thread i handles columns: [i*8, i*8+8), [i*8+256, i*8+264), etc.
+        const int col_base = i * warp_size * 32 + threadIdx.x * 8;
 
         // load quantized weight from bit-planes
         #pragma unroll
@@ -81,8 +82,9 @@ __global__ void dequant_formula_kbit_store(
                 const uint8_t idx1 = q_w[k*2+1] & 0xff;
 
                 // Calculate column indices for these two weights
-                // Each j iteration handles 8 weights, each k iteration handles 2 weights
-                const int col_offset = (3 - j) * 8 + k * 2;
+                // j corresponds to byte position in q_w (j=3 for highest byte, j=0 for lowest)
+                // Due to interleaved storage: j=0 -> cols [0,8), j=1 -> cols [256,264), etc.
+                const int col_offset = j * 8 * eff_warp_size + k * 2;
                 const int col0 = col_base + col_offset;
                 const int col1 = col_base + col_offset + 1;
 
@@ -148,7 +150,8 @@ __global__ void dequant_formula_kbit_store_optimized(
             if (threadIdx.x >= eff_warp_size) break;
         }
 
-        const int col_base = i * warp_size * 32 + threadIdx.x * 32;
+        // Calculate base column index (interleaved storage pattern)
+        const int col_base = i * warp_size * 32 + threadIdx.x * 8;
         const int g_idx = col_base / group_size;
 
         // Load scale and zero once for all 32 weights (when group_size >= 32)

@@ -94,21 +94,35 @@ def test_dequant_formula(w_bits=6, group_size=128, N=256, K=1024, device="cuda:0
     # Run Python implementation
     print("\n[1] Running Python implementation...")
     torch.cuda.synchronize()
+
+    # Debug: Check intermediate values
+    _, out_features, in_chunks = qweight.shape
+    in_features = in_chunks * 32
+    qweight_sub = qweight[:w_bits]
+    weight = restore_uint8_from_weighttensor_torch(qweight_sub, w_bits)
+    print(f"  Python weight range: min={weight.min().item()}, max={weight.max().item()}")
+
+    min_bits = 3
+    bit_err = w_bits - min_bits
+    print(f"  Original zero range: min={zero.min().item():.6f}, max={zero.max().item():.6f}")
+    zero_adjusted_dbg = zero * (2 ** bit_err)
+    print(f"  Adjusted zero range: min={zero_adjusted_dbg.min().item():.6f}, max={zero_adjusted_dbg.max().item():.6f}")
+
     python_result = python_dequant(qweight, scale, zero, w_bits, group_size)
     torch.cuda.synchronize()
     print(f"  Result shape: {python_result.shape}")
+    print(f"  Python result range: min={python_result.min().item():.6f}, max={python_result.max().item():.6f}")
 
     # Run CUDA implementation
     # IMPORTANT: CUDA kernel expects pre-adjusted zero (matches APLinear.forward behavior)
     print("\n[2] Running CUDA implementation...")
-    min_bits = 3
-    bit_err = w_bits - min_bits
     zero_adjusted = zero * (2 ** bit_err)
 
     torch.cuda.synchronize()
     cuda_result = dequant_formula_kbit(qweight, scale, zero_adjusted, w_bits, group_size)
     torch.cuda.synchronize()
     print(f"  Result shape: {cuda_result.shape}")
+    print(f"  CUDA result range: min={cuda_result.min().item():.6f}, max={cuda_result.max().item():.6f}")
 
     # Compare results
     print("\n[3] Comparing results...")
