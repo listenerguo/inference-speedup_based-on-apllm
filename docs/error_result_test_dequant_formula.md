@@ -7,7 +7,7 @@
 
 | 项目 | 信息 |
 |------|------|
-| 测试日期 | 2026.1.30 16:30|
+| 测试日期 | 2026.1.30 20:50|
 | 测试人员 | Guo|
 | 服务器名称 | personal_laptop	|
 | GPU 型号 | NVIDIA GeForce RTX 4060 Laptop GPU|
@@ -52,6 +52,153 @@
 
 ```
 请在此处记录测试过程中遇到的任何问题或异常情况：
+
+ERROR: 2026.1.30--20:50
+============================================================
+  Formula Dequantization Verification Test
+  w = scale * (w' - zero)
+============================================================
+
+Using device: NVIDIA GeForce RTX 4060 Laptop GPU
+
+============================================================
+Testing: w_bits=4, group_size=128, N=256, K=1024
+============================================================
+✓ CUDA extension loaded successfully
+  qweight shape: torch.Size([8, 256, 32])
+  scale shape: torch.Size([256, 8])
+  zero shape: torch.Size([256, 8])
+
+[1] Running Python implementation...
+  Result shape: torch.Size([256, 1024])
+
+[2] Running CUDA implementation...
+  Result shape: torch.Size([256, 1024])
+
+[3] Comparing results...
+  ✓ Shapes match: torch.Size([256, 1024])
+  Max absolute difference: 8.775391e+00
+  Mean absolute difference: 7.438181e-01
+  ✗ Results do NOT match within tolerance
+
+  Worst case at [224, 597]:
+    Python: -4.945312
+    CUDA:   3.830078
+    Diff:   8.775391e+00
+
+============================================================
+Testing: w_bits=6, group_size=128, N=256, K=2048
+============================================================
+✓ CUDA extension loaded successfully
+  qweight shape: torch.Size([8, 256, 64])
+  scale shape: torch.Size([256, 16])
+  zero shape: torch.Size([256, 16])
+
+[1] Running Python implementation...
+  Result shape: torch.Size([256, 2048])
+
+[2] Running CUDA implementation...
+  Result shape: torch.Size([256, 2048])
+
+[3] Comparing results...
+  ✓ Shapes match: torch.Size([256, 2048])
+  Max absolute difference: 3.392969e+01
+  Mean absolute difference: 3.052324e+00
+  ✗ Results do NOT match within tolerance
+
+  Worst case at [36, 1446]:
+    Python: 11.070312
+    CUDA:   -22.859375
+    Diff:   3.392969e+01
+
+============================================================
+Testing: w_bits=8, group_size=128, N=512, K=2048
+============================================================
+✓ CUDA extension loaded successfully
+  qweight shape: torch.Size([8, 512, 64])
+  scale shape: torch.Size([512, 16])
+  zero shape: torch.Size([512, 16])
+
+[1] Running Python implementation...
+  Result shape: torch.Size([512, 2048])
+
+[2] Running CUDA implementation...
+  Result shape: torch.Size([512, 2048])
+
+[3] Comparing results...
+  ✓ Shapes match: torch.Size([512, 2048])
+  Max absolute difference: 1.390625e+02
+  Mean absolute difference: 1.217268e+01
+  ✗ Results do NOT match within tolerance
+
+  Worst case at [491, 1729]:
+    Python: 81.187500
+    CUDA:   -57.875000
+    Diff:   1.390625e+02
+
+============================================================
+Testing: w_bits=6, group_size=64, N=256, K=1024
+============================================================
+✓ CUDA extension loaded successfully
+  qweight shape: torch.Size([8, 256, 32])
+  scale shape: torch.Size([256, 16])
+  zero shape: torch.Size([256, 16])
+
+[1] Running Python implementation...
+  Result shape: torch.Size([256, 1024])
+
+[2] Running CUDA implementation...
+  Result shape: torch.Size([256, 1024])
+
+[3] Comparing results...
+  ✓ Shapes match: torch.Size([256, 1024])
+  Max absolute difference: 3.667969e+01
+  Mean absolute difference: 3.296138e+00
+  ✗ Results do NOT match within tolerance
+
+  Worst case at [118, 701]:
+    Python: -12.226562
+    CUDA:   24.453125
+    Diff:   3.667969e+01
+
+============================================================
+Testing: w_bits=6, group_size=256, N=256, K=2048
+============================================================
+✓ CUDA extension loaded successfully
+  qweight shape: torch.Size([8, 256, 64])
+  scale shape: torch.Size([256, 8])
+  zero shape: torch.Size([256, 8])
+
+[1] Running Python implementation...
+  Result shape: torch.Size([256, 2048])
+
+[2] Running CUDA implementation...
+  Result shape: torch.Size([256, 2048])
+
+[3] Comparing results...
+  ✓ Shapes match: torch.Size([256, 2048])
+  Max absolute difference: 3.413281e+01
+  Mean absolute difference: 2.618749e+00
+  ✗ Results do NOT match within tolerance
+
+  Worst case at [44, 1637]:
+    Python: 24.765625
+    CUDA:   -9.367188
+    Diff:   3.413281e+01
+
+============================================================
+  SOME TESTS FAILED! ✗
+============================================================
+
+
+---------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------
+
+
+---------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------
+HISTORY:
+2026.1.30--16:30
 
 出错：符合问题 4: ✗ Results do NOT match within tolerance； 且误差较大
 具体执行结果：
@@ -214,5 +361,6 @@ CUDA设计后，代码如下：
 是解包出错， 还是反量化与分组参数scale和zero 的计算出错， 还是最后于输入x的推理计算出错。
 
 ```
+
 
 ---
