@@ -120,9 +120,9 @@ __global__ void dequant_formula_kbit_store(
 }
 
 /**
- * Optimized version with shared group assumption:
- * When group_size >= 32, all 32 weights processed by a thread share the same scale/zero.
- * This reduces memory accesses significantly.
+ * Optimized version for per-group dequantization.
+ * Correctly handles interleaved storage pattern where weights from a single thread
+ * may span multiple groups depending on group_size.
  */
 template <int bits, int group_size>
 __global__ void dequant_formula_kbit_store_optimized(
@@ -150,16 +150,6 @@ __global__ void dequant_formula_kbit_store_optimized(
             if (threadIdx.x >= eff_warp_size) break;
         }
 
-        // Calculate base column index (interleaved storage pattern)
-        const int col_base = i * warp_size * 32 + threadIdx.x * 8;
-        const int g_idx = col_base / group_size;
-
-        // Load scale and zero once for all 32 weights (when group_size >= 32)
-        const __half scale = __ldg(&scales[row_idx * num_groups + g_idx]);
-        const __half zero = __ldg(&zeros[row_idx * num_groups + g_idx]);
-        const __half2 scale2 = __half2half2(scale);
-        const __half2 zero2 = __half2half2(zero);
-
         // load quantized weight from bit-planes
         #pragma unroll
         for (int j = 0; j < bits; j++) {
@@ -170,16 +160,44 @@ __global__ void dequant_formula_kbit_store_optimized(
         // Unpack bit-planes
         dequant<bits, false>(q, q_w);
 
-        // Formula dequantization with shared scale/zero
+        // Formula dequantization with correct column index calculation
+        // Each thread processes 32 weights stored in interleaved pattern:
+        // - q_w[0-1] bytes j=3: columns [col_base + 24*eff_warp_size, col_base + 24*eff_warp_size + 8)
+        // - q_w[0-1] bytes j=2: columns [col_base + 16*eff_warp_size, col_base + 16*eff_warp_size + 8)
+        // - q_w[0-1] bytes j=1: columns [col_base + 8*eff_warp_size, col_base + 8*eff_warp_size + 8)
+        // - q_w[0-1] bytes j=0: columns [col_base, col_base + 8)
+        const int col_base = i * warp_size * 32 + threadIdx.x * 8;
+
         #pragma unroll
         for (int j = 3; j >= 0; j--) {
             #pragma unroll
             for (int k = 0; k < 4; k++) {
-                const __half x = __int2half_rn(q_w[k*2+0] & 0xff);
-                const __half y = __int2half_rn(q_w[k*2+1] & 0xff);
-                __half2 indices = make_half2(x, y);
-                dq_w[j * 4 + k] = __hmul2(scale2, __hsub2(indices, zero2));
+                // Extract two 8-bit indices
+                const uint8_t idx0 = q_w[k*2+0] & 0xff;
+                const uint8_t idx1 = q_w[k*2+1] & 0xff;
+
+                // Calculate actual column indices (interleaved pattern)
+                const int col_offset = j * 8 * eff_warp_size + k * 2;
+                const int col0 = col_base + col_offset;
+                const int col1 = col_base + col_offset + 1;
+
+                // Calculate group indices for each weight
+                const int g_idx0 = col0 / group_size;
+                const int g_idx1 = col1 / group_size;
+
+                // Load scale and zero for each weight separately
+                const __half s0 = __ldg(&scales[row_idx * num_groups + g_idx0]);
+                const __half z0 = __ldg(&zeros[row_idx * num_groups + g_idx0]);
+                const __half s1 = __ldg(&scales[row_idx * num_groups + g_idx1]);
+                const __half z1 = __ldg(&zeros[row_idx * num_groups + g_idx1]);
+
+                // Apply formula: w = scale * (w' - zero)
+                const __half w0 = __hmul(s0, __hsub(__int2half_rn(idx0), z0));
+                const __half w1 = __hmul(s1, __hsub(__int2half_rn(idx1), z1));
+
+                dq_w[j * 4 + k] = make_half2(w0, w1);
             }
+            // Shift to next byte in each q_w element
             #pragma unroll
             for (int k = 0; k < 8; k++)
                 q_w[k] >>= 8;

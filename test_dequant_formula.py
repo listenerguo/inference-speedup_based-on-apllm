@@ -141,32 +141,75 @@ def test_dequant_formula(w_bits=6, group_size=128, N=256, K=1024, device="cuda:0
     max_diff = abs_diff.max().item()
     mean_diff = abs_diff.mean().item()
 
+    # Calculate percentiles for better understanding of error distribution
+    diff_flat = abs_diff.flatten()
+    percentiles = [50, 75, 90, 95, 99, 99.9]
+    print(f"\n  📊 Error Distribution Analysis:")
+    print(f"    Max absolute difference:  {max_diff:.6e}")
+    print(f"    Mean absolute difference: {mean_diff:.6e}")
+    print(f"    Median (50th percentile): {torch.quantile(diff_flat, 0.5).item():.6e}")
+    for p in [75, 90, 95, 99, 99.9]:
+        val = torch.quantile(diff_flat, p/100).item()
+        print(f"    {p}th percentile:          {val:.6e}")
+
+    # Count how many values exceed different thresholds
+    thresholds = [0.001, 0.01, 0.1, 1.0]
+    print(f"\n  📈 Values exceeding thresholds:")
+    total = diff_flat.numel()
+    for thresh in thresholds:
+        count = (diff_flat > thresh).sum().item()
+        percentage = 100.0 * count / total
+        print(f"    > {thresh:6.3f}: {count:8d} / {total} ({percentage:5.2f}%)")
+
     # Relative tolerance for FP16
     rtol = 1e-3
     atol = 1e-3
 
     is_close = torch.allclose(python_fp32, cuda_fp32, rtol=rtol, atol=atol)
 
-    print(f"  Max absolute difference: {max_diff:.6e}")
-    print(f"  Mean absolute difference: {mean_diff:.6e}")
+    print(f"\n  🎯 Tolerance Check (rtol={rtol}, atol={atol}):")
+    if is_close:
+        print(f"    ✓ Results match within tolerance")
+    else:
+        print(f"    ✗ Results do NOT match within tolerance")
+
+    # Find and analyze worst cases (top 5)
+    print(f"\n  🔍 Top 5 Worst Cases:")
+    _, worst_indices = torch.topk(diff_flat, min(5, diff_flat.numel()))
+
+    for rank, idx in enumerate(worst_indices, 1):
+        idx_val = idx.item()
+        worst_row = idx_val // K
+        worst_col = idx_val % K
+
+        py_val = python_result[worst_row, worst_col].item()
+        cu_val = cuda_result[worst_row, worst_col].item()
+        diff_val = abs_diff[worst_row, worst_col].item()
+
+        # Calculate which group this column belongs to
+        group_idx = worst_col // group_size
+        col_in_group = worst_col % group_size
+
+        print(f"    #{rank}: Position [{worst_row}, {worst_col}] (group {group_idx}, col {col_in_group} in group)")
+        print(f"        Python: {py_val:12.6f}")
+        print(f"        CUDA:   {cu_val:12.6f}")
+        print(f"        Diff:   {diff_val:12.6e}")
+
+        # Show the quantized weight, scale, and zero for this position
+        qweight_sub = qweight[:w_bits]
+        weight_restored = restore_uint8_from_weighttensor_torch(qweight_sub, w_bits)
+        qw_val = weight_restored[worst_row, worst_col].item()
+        scale_val = scale[worst_row, group_idx].item()
+        zero_val = zero[worst_row, group_idx].item()
+        zero_adj_val = zero_adjusted_dbg[worst_row, group_idx].item()
+
+        print(f"        Quantized weight: {qw_val}")
+        print(f"        Scale: {scale_val:.6f}, Zero (raw): {zero_val:.6f}, Zero (adjusted): {zero_adj_val:.6f}")
+        print(f"        Expected: scale * (qw - zero_adj) = {scale_val:.6f} * ({qw_val} - {zero_adj_val:.6f}) = {scale_val * (qw_val - zero_adj_val):.6f}")
 
     if is_close:
-        print(f"  ✓ Results match within tolerance (rtol={rtol}, atol={atol})")
         return True
     else:
-        print(f"  ✗ Results do NOT match within tolerance")
-
-        # Find worst case
-        diff_flat = abs_diff.flatten()
-        worst_idx = diff_flat.argmax().item()
-        worst_row = worst_idx // K
-        worst_col = worst_idx % K
-
-        print(f"\n  Worst case at [{worst_row}, {worst_col}]:")
-        print(f"    Python: {python_result[worst_row, worst_col].item():.6f}")
-        print(f"    CUDA:   {cuda_result[worst_row, worst_col].item():.6f}")
-        print(f"    Diff:   {abs_diff[worst_row, worst_col].item():.6e}")
-
         return False
 
 
