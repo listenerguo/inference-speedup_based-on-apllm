@@ -19,10 +19,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from any_precision.modules.APLinear import restore_uint8_from_weighttensor_torch
 
 
-def python_dequant(qweight, scale, zero, w_bits, group_size):
+def python_dequant(qweight, scale, zero, w_bits, group_size, min_bits=3):
     """
     Python reference implementation of formula-based dequantization.
     Matches APLinear._dequant_temp logic.
+
+    IMPORTANT: This function expects the RAW zero (not pre-adjusted).
+    It will apply bit error correction internally to match APLinear behavior.
     """
     _, out_features, in_chunks = qweight.shape
     in_features = in_chunks * 32
@@ -32,9 +35,13 @@ def python_dequant(qweight, scale, zero, w_bits, group_size):
     weight = restore_uint8_from_weighttensor_torch(qweight_sub, w_bits)
     weight_f = weight.to(torch.float16)
 
+    # Apply bit error correction for zero point (matches APLinear.forward)
+    bit_err = w_bits - min_bits
+    zero_adjusted = zero * (2 ** bit_err)
+
     # Apply scale and zero
     scale_pc = scale.repeat_interleave(group_size, dim=1)
-    zero_pc = zero.repeat_interleave(group_size, dim=1)
+    zero_pc = zero_adjusted.repeat_interleave(group_size, dim=1)
 
     if scale_pc.shape[1] > in_features:
         scale_pc = scale_pc[:, :in_features]
@@ -92,9 +99,14 @@ def test_dequant_formula(w_bits=6, group_size=128, N=256, K=1024, device="cuda:0
     print(f"  Result shape: {python_result.shape}")
 
     # Run CUDA implementation
+    # IMPORTANT: CUDA kernel expects pre-adjusted zero (matches APLinear.forward behavior)
     print("\n[2] Running CUDA implementation...")
+    min_bits = 3
+    bit_err = w_bits - min_bits
+    zero_adjusted = zero * (2 ** bit_err)
+
     torch.cuda.synchronize()
-    cuda_result = dequant_formula_kbit(qweight, scale, zero, w_bits, group_size)
+    cuda_result = dequant_formula_kbit(qweight, scale, zero_adjusted, w_bits, group_size)
     torch.cuda.synchronize()
     print(f"  Result shape: {cuda_result.shape}")
 
@@ -167,11 +179,16 @@ def benchmark_dequant(w_bits=6, group_size=128, N=2048, K=2048, device="cuda:0",
     scale = torch.randn(N, num_groups, dtype=torch.float16, device=device) * 0.1
     zero = torch.randn(N, num_groups, dtype=torch.float16, device=device) * 0.5
 
+    # Apply bit error correction for CUDA kernel (matches APLinear.forward)
+    min_bits = 3
+    bit_err = w_bits - min_bits
+    zero_adjusted = zero * (2 ** bit_err)
+
     # Warmup
     print(f"\n[Warmup] {warmup} iterations...")
     for _ in range(warmup):
         _ = python_dequant(qweight, scale, zero, w_bits, group_size)
-        _ = dequant_formula_kbit(qweight, scale, zero, w_bits, group_size)
+        _ = dequant_formula_kbit(qweight, scale, zero_adjusted, w_bits, group_size)
     torch.cuda.synchronize()
 
     # Benchmark Python
@@ -194,7 +211,7 @@ def benchmark_dequant(w_bits=6, group_size=128, N=2048, K=2048, device="cuda:0",
 
     start.record()
     for _ in range(iterations):
-        _ = dequant_formula_kbit(qweight, scale, zero, w_bits, group_size)
+        _ = dequant_formula_kbit(qweight, scale, zero_adjusted, w_bits, group_size)
     end.record()
     torch.cuda.synchronize()
     cuda_time = start.elapsed_time(end) / iterations
